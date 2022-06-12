@@ -1,0 +1,114 @@
+import pandas as pd
+import seaborn as seaborn
+from sklearn import preprocessing
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import SelectKBest
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import KFold, cross_val_score
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import LabelEncoder
+from sklearn.svm import SVC, LinearSVC
+from scipy.stats import ttest_ind
+
+# read csv
+df = pd.read_csv("example.csv")
+
+pd.set_option("display.max_rows", None, "display.max_columns", None)
+
+
+models = [
+    LogisticRegression(max_iter=10000),
+    RandomForestClassifier(n_estimators=100, criterion='entropy'),
+    KNeighborsClassifier(n_neighbors=10, weights='distance'),
+    GaussianNB(),
+    SVC(kernel='rbf', random_state=0, gamma=.01, C=100000),
+]
+
+
+counts = df['Genre'].value_counts()
+picture = seaborn.countplot(x='Genre', data=df)
+plt.xticks(rotation=45)
+plt.show()
+
+#Oyuncu ve direktorleri iceren satirlar kategorik veri oldugu icin encoding islemi yapiliyor
+df_temp = df[df.columns[3:7]]
+
+df_temp = df_temp.apply(LabelEncoder().fit_transform)
+
+df_temp2 = df[df.columns[2:3]]
+
+df_temp2 = df_temp2.apply((LabelEncoder().fit_transform))
+
+# select label
+y = df['Genre'].to_numpy()
+
+# drop unnecessary variables
+df = df.drop(['Name of movie', 'Description', 'Director', 'Stars_1', 'Stars_2', 'Stars_3', 'Stars_4', 'Genre'], axis=1)
+
+x = df.to_numpy()
+
+# normalization
+min_max_scaler = preprocessing.MinMaxScaler()
+x_scaled = min_max_scaler.fit_transform(x)
+df = pd.DataFrame(x_scaled)
+
+x_scaled = df.to_numpy()
+
+
+frames = [df_temp, df_temp2, df]
+result = pd.concat(frames, axis=1)
+
+# score arrays
+scores = []
+scoresScaled = []
+scoresPCA = []
+scoresSelection = []
+scoresAll = []
+
+x = result.to_numpy()
+
+# selection
+x_reduced = SelectKBest(k=5).fit_transform(x_scaled, y)
+
+# PCA
+transformer = PCA()
+x_transformed = transformer.fit_transform(x_scaled)
+
+
+x_all = transformer.fit_transform(x_reduced)
+
+names = ["Logistic Regression", "Random Forest", "KNN", "GaussianNB", "SVC"]
+
+
+for i in range(len(models)):
+    # Kfold 
+    kf = KFold(n_splits=10, shuffle=True)
+
+    scores.append(cross_val_score(models[i], x, y, cv=kf))
+    scoresScaled.append(cross_val_score(models[i], x_scaled, y, cv=kf))
+    scoresPCA.append(cross_val_score(models[i], x_transformed, y, cv=kf))
+    scoresSelection.append(cross_val_score(models[i], x_reduced, y, cv=kf))
+    scoresAll.append(cross_val_score(models[i], x_all, y, cv=kf))
+
+    print("Model:{} Doğruluk:{:.3f}".format(names[i], scores[i].mean()))
+    print("Model:{} Doğruluk:{:.3f}".format(names[i], scoresScaled[i].mean()))
+    print("Model:{} Doğruluk:{:.3f}".format(names[i], scoresPCA[i].mean()))
+    print("Model:{} Doğruluk:{:.3f}".format(names[i], scoresSelection[i].mean()))
+    print("Model:{} Doğruluk:{:.3f}".format(names[i], scoresAll[i].mean()))
+
+# t-test results
+for i in range(len(models) - 1):
+    for j in range(i + 1, len(models)):
+        t1, p1 = ttest_ind(scores[i], scores[j])
+        t2, p2 = ttest_ind(scoresScaled[i], scoresScaled[j])
+        t3, p3 = ttest_ind(scoresPCA[i], scoresPCA[j])
+        t4, p4 = ttest_ind(scoresSelection[i], scoresSelection[j])
+        t5, p5 = ttest_ind(scoresAll[i], scoresAll[j])
+        print("Modeller {} ve {}:".format(names[i], names[j]))
+        print("T-test sonuçları:")
+        print(
+            "Varsayılan: t: {:.3f} p: {:.3f}\tNormalizasyon: t: {:.3f} p: {:.3f}\nÖzellik Dönüşümü(PCA): t: {:.3f} p: {:.3f}\tÖzellik Seçimi: t: {:.3f} p: {:.3f}\nNormalizasyon ve Özellik Seçimi: t: {:.3f} p: {:.3f}".format(
+                t1, p1, t2, p2, t3, p3, t4, p4, t5, p5), "\n")
