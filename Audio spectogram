@@ -1,0 +1,66 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import librosa
+from librosa import display
+
+def read_file(filename, w_size):
+    data, sr = librosa.load(filename, sr=None)
+    overlap = 0.5
+    hop_length = w_size * (1 - overlap)
+    hop_length = int(hop_length)
+    spec, fs= spectogram(hop_length, w_size, data, sr)
+    return spec,fs
+
+
+# calculate spectogram
+def spectogram(hop_length, w_size, data, sr):
+    frames = []
+    for section in range(0, len(data) - w_size, hop_length):
+        frames.append(data[section: section + w_size])
+    #window = np.hanning(w_size)
+
+    spec = []
+    for section in frames:
+        spec.append(np.fft.rfft(section))
+
+    spec = np.array(spec)
+    return spec.T, sr
+# visualization of audios
+
+def plot(spec_data, fs, window_len):
+    librosa.display.specshow(spec_data,
+                             x_axis="time",
+                             y_axis="linear",
+                             n_fft=window_len,
+                             hop_length=window_len // 2,
+                             win_length=window_len,
+                             sr=fs)
+    plt.colorbar(format="%+2.f dB")
+    plt.show()
+
+# audio1 and audio2 is shown together
+
+def concrete_plots(spec_data_1, fs_1, spec_data_2, fs_2, window_len):
+
+    plt.title("Audio 1")
+    plot(spec_data_1, fs_1, window_len)
+
+
+    plt.title("Audio 2")
+    plot(spec_data_2, fs_2, window_len)
+
+def spec_data(audio, window_len):
+    spec, fs = read_file(audio, window_len)
+    spec = np.abs(spec)
+    spec_data = librosa.amplitude_to_db(spec)
+    return spec_data, fs
+
+window_len = 50
+
+audio_1 = "Audio1.wav"
+audio_2 = "Audio2.wav"
+
+spec_data_1, fs_1 = spec_data(audio_1, window_len)
+spec_data_2, fs_2 = spec_data(audio_2, window_len)
+
+concrete_plots(spec_data_1, fs_1, spec_data_2, fs_2, window_len)
