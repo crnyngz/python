@@ -1,0 +1,369 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from matplotlib import pyplot
+from sklearn import preprocessing
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.tree import DecisionTreeRegressor
+from sqlalchemy import create_engine
+from sklearn.model_selection import KFold
+from sklearn.metrics import accuracy_score
+from sklearn.linear_model import Lasso
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', None)
+pd.set_option('display.float_format', lambda x: '%.3f' % x)
+
+
+def data_import() -> object:
+    # data import and connection
+    engine = create_engine('postgresql://user:password@localhost/databasename')
+    fmt = '%Y-%m-%d'
+    data = pd.read_sql("SELECT * FROM transactiondata ", engine, parse_dates={'transactiondatewithouttime': fmt})
+    return data
+
+
+def information(df):
+    # data information
+    df.info()
+    # Head data
+    print("İlk 5 kayıt: \n ", df.head(5))
+
+    print("Veri setinin sayısal parametrelere göre incelenmesi \n",
+          df.describe())
+
+    df.dropna(inplace=True)
+    df = df[df["cquantity"] > 0]
+
+
+    customer_number = df["customerid"].nunique()
+    print("Müşteri Sayısı:", customer_number)
+    transaction_number = df["invoiceid"].nunique()
+    print("Transaction Sayısı:", transaction_number)
+    # 82449 customer, 381884 transaction
+
+    # daily transaction number
+    df['invoice'] = df['invoiceid']
+    temp_df = df
+    temp_df['transactiondatewithouttime'] = pd.to_datetime(temp_df['transactiondatewithouttime']).dt.date
+    daily_transactions = temp_df.groupby("transactiondatewithouttime").agg({"invoice": lambda x: x.nunique()}) \
+        .rename(columns={'invoice': 'Transactions'})
+
+    daily_transactions.head(5)
+
+    # first transaction date: 1 January 2019
+    dailytransactionmin = daily_transactions.index.min()
+    print("İlk İşlem:", dailytransactionmin)
+
+    # last transaction date: 21 january 2022
+    dailytransactionmax = daily_transactions.index.max()
+    print("Son İşlem:", dailytransactionmax)
+
+    # Daily transaction grapf
+    grafik.daily(daily_transactions)
+
+    # monthly transaction grapf
+    grafik.monthly(temp_df)
+
+    return df
+
+def cleaning(df):
+
+    df.isnull()
+    df.isnull().any(axis=1)
+
+    df.duplicated()
+    df.duplicated(['invoiceid', 'productid'])
+    df.drop_duplicates()
+
+    df = df.fillna(method='ffill')
+    df = df.fillna(method='backfill')
+    return df
+
+
+def normalization(data):
+    # data normalization with using minmax scaling
+    data[['price', 'cquantity', 'camount', 'discountamount', 'netamount']] = \
+        preprocessing.minmax_scale(
+            data[['price', 'cquantity', 'camount', 'discountamount', 'netamount']])
+    return data
+
+
+def reduction(df):
+    df = df.drop(
+        ["ownerid", "customersource", "storeid", "crmproductid", "invoicedetailid",
+         "alternatingsubaxe", "basketsize"], axis=1)
+    return df
+
+
+def feature_selection(df):
+
+    # pearson correlation matrix
+
+    df = non_numeric_to_numeric(df)
+    x = pd.DataFrame(df)
+    x.columns = df.columns
+    y = pd.DataFrame(df.invoiceid)
+    y.columns = ['invoiceid']
+    # Using Pearson Correlation
+    plt.figure(figsize=(25, 25))
+    cor = df.corr()
+    sns.heatmap(cor, annot=True, cmap=plt.cm.Blues)
+    plt.xticks(size=20)
+    plt.yticks(size=20)
+    plt.show()
+    # Correlation with output variable
+    cor_target = abs(cor["invoiceid"])
+    # Selecting highly correlated features
+    relevant_features = cor_target[cor_target > 0.5]
+    print(relevant_features)
+
+
+
+def non_numeric_to_numeric(data):
+    # convert to non numeric variables to numeric
+    columns = data.columns.values
+    for column in columns:
+        text_digit_value = {}
+
+        def convert_to_int(val):
+            return text_digit_value[val]
+
+        if data[column].dtype != np.int64 and data[column].dtype != np.float64 and \
+                data[column].dtype != np.dtype('datetime64[ns]'):
+            column_contents = data[column].values.tolist()
+            unique_elements = set(column_contents)
+            x = 0
+            for unique in unique_elements:
+                if unique not in text_digit_value:
+                    text_digit_value[unique] = x
+                    x += 1
+            data[column] = list(map(convert_to_int, data[column]))
+    return data
+
+
+def data_generalization(df):
+
+    # data generalization
+
+    df["producttype"] = df["producttype"].replace(to_replace=["NULL"],
+                                                  value="belirtilmemiş ürün tipi")
+    df["producttype"] = df["producttype"].replace(to_replace=["giveaway", "sample", "deluxe sample"],
+                                                  value="sample")
+
+    df["genericcustomertype"] = df["genericcustomertype"].replace(
+        to_replace=["Offline Mass Customer", "Real Customer"],
+        value="Local Customer")
+
+    df["spendamount"] = df["cquantity"] * df["price"]
+    return df
+
+
+def outlier_thresholds(dataframe, variable):
+    quartile1 = dataframe[variable].quantile(0.01)
+    quartile3 = dataframe[variable].quantile(0.99)
+    interquantile_range = quartile3 - quartile1
+    up_limit = quartile3 + 1.5 * interquantile_range
+    low_limit = quartile1 - 1.5 * interquantile_range
+    return low_limit, up_limit
+
+
+def replace_with_thresholds(dataframe, variable):
+    low_limit, up_limit = outlier_thresholds(dataframe, variable)
+    # dataframe.loc[(dataframe[variable] < low_limit), variable] = low_limit
+    dataframe.loc[(dataframe[variable] > up_limit), variable] = up_limit
+
+
+def clv(df):
+    df['totalprice'] = df['cquantity'] * df['price']
+
+    summary_df = df.groupby('customerid').agg({
+        'invoiceid': lambda x: x.nunique(),
+        'cquantity': lambda x: x.sum(),
+        'totalprice': lambda x: x.sum()})
+
+    summary_df.columns = ['totaltransactions', 'totalunit', 'totalprice']
+
+    print('cltv \n', summary_df.head(5))
+
+    summary_df['averageorder'] = summary_df['totalprice'] * summary_df['totaltransactions']
+    print('ortalama sipariş \n', summary_df['averageorder'].head(5))
+
+    print(summary_df.shape[0])
+
+    summary_df['frequency'] = summary_df['totaltransactions'] / summary_df.shape[0]
+
+    repeatrate = summary_df[summary_df.totaltransactions > 1].shape[0] / summary_df.shape[0]
+    churnrate = 1 - repeatrate
+    print("churn rate \n", churnrate)
+
+    summary_df['profitmargin'] = summary_df['totalprice'] * 0.05
+    print("summary \n", summary_df['profitmargin'].head(5))
+
+    summary_df['CL'] = (summary_df['averageorder'] / summary_df['frequency']) / churnrate
+    summary_df['CLTV'] = summary_df['CL'] - summary_df['profitmargin']
+    pd.set_option('display.float_format', lambda x: '%.5f' % x)
+    print("lifetime value \n", summary_df.sort_values('CLTV', ascending=False).head(5))
+
+    print('summary df \n', summary_df.head(5))
+
+    scaler = MinMaxScaler(feature_range=(0, 100))
+    scaler.fit(summary_df[['CLTV']])
+    summary_df['scaled_cltv'] = scaler.transform(summary_df[['CLTV']])
+
+    summary_df.sort_values("CLTV", ascending=True)
+    pd.set_option('display.max_columns', 20)
+
+    print("transform edilmiş hali \n",
+          summary_df.sort_values(by="CLTV", ascending=False).head(5))
+    return summary_df
+
+
+def train_test_data(df):
+    print("Modellerin uygulanması:\n")
+    # We get our feature variables and target variables
+    X = df.drop(columns=['CLTV'])
+    y = df['CLTV']
+    print(X.shape, y.shape)
+
+    # We split our data into training and test sets
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+    print("Train ve test verisi:\n", X_train.shape, X_test.shape, y_train.shape, y_test.shape)
+    return (X_train, X_test, y_train, y_test)
+
+
+def train_test_data_2(df):
+    # We get our feature variables and target variables
+    X = df.drop(columns=['CLTV'])
+    y = df['CLTV']
+    print(X.shape, y.shape)
+    return (X,y)
+
+
+def overfitting_decisiontreeregressor(df):
+    X_train, X_test, y_train, y_test = train_test_data(df)
+    train_scores, test_scores = list(), list()
+    # define the tree depths to evaluate
+    values = [i for i in range(1, 21)]
+    # evaluate a decision tree for each depth
+    for i in values:
+        # configure the model
+        model = DecisionTreeRegressor(max_depth=i)
+        # fit model on the training dataset
+        model.fit(X_train, y_train)
+        # evaluate on the train dataset
+        train_yhat = model.predict(X_train)
+        train_acc = accuracy_score(y_train, train_yhat)
+        train_scores.append(train_acc)
+        # evaluate on the test dataset
+        test_yhat = model.predict(X_test)
+        test_acc = accuracy_score(y_test, test_yhat)
+        test_scores.append(test_acc)
+        # summarize progress
+        print('>%d, train: %.3f, test: %.3f' % (i, train_acc, test_acc))
+
+        print('>%d, train: %.3f, test: %.3f' % (i, train_acc, test_acc))
+        # plot of train and test scores vs tree depth
+        pyplot.plot(values, train_scores, '-o', label='Train')
+        pyplot.plot(values, test_scores, '-o', label='Test')
+        pyplot.legend()
+        pyplot.show()
+
+
+def implement_algorithms(X_train, X_test, Y_train, Y_test):
+    # creating list for output results
+    results = []
+
+    rModel = LinearRegression()
+    rModel.fit(X_train, Y_train)
+    y_pred_lin = rModel.predict(X_test)
+    print("LinearRegression on training data score: ", rModel.score(X_train, Y_train))
+    print("LinearRegression on test data score: ", rModel.score(X_test,Y_test))
+    print('Kullanılan öznitelik sayısı: ', np.sum(rModel.coef_ != 0))
+    #print("Accuracy:", accuracy_score(Y_test, y_pred_lin))
+    #print("Error: ", 1 - accuracy_score(Y_test, y_pred_lin, normalize=True))
+    print('R Squared - Multiple Regression: ' + str(round(r2_score(Y_test, y_pred_lin), 3)))
+    print("\n")
+
+    rfg = RandomForestRegressor(max_depth=20, random_state=42)
+    rfg.fit(X_train, Y_train)
+    y_pred_rfg = rfg.predict(X_test)
+    print("Random forest on training data score: ", rfg.score(X_train, Y_train))
+    print("Random forest on test data score: ", rfg.score(X_test, Y_test))
+    #print("Accuracy:", accuracy_score(Y_test, y_pred_rfg, normalize=True))
+    #print("Error:", 1 - accuracy_score(Y_test, y_pred_rfg, normalize=True))
+    print("\n")
+
+    lasso = Lasso(alpha=0.1)
+    lasso.fit(X_train, Y_train)
+    y_pred_lasso = lasso.predict(X_test)
+    print("Lasso on training data score: ", lasso.score(X_train, Y_train))
+    print("Lasso on test data score: ", lasso.score(X_test, Y_test))
+    print('Kullanılan öznitelik sayısı: ', np.sum(lasso.coef_ != 0))
+    #print("Accuracy:", accuracy_score(Y_test, y_pred_lasso))
+    #print("Error:", 1 - accuracy_score(Y_test, y_pred_lasso))
+    print("\n")
+
+    knn_model = KNeighborsRegressor(n_neighbors=3)
+    knn_model.fit(X_train, Y_train)
+    y_pred_knn = knn_model.predict(X_test)
+    print("KNeighborsRegresion on training data score:", knn_model.score(X_train,Y_train))
+    print("KNeighborsRegresion on test data score: ", knn_model.score(X_test, Y_test))
+    #print("Accuracy:", accuracy_score(Y_test, y_pred_knn)
+    #print("Error:", 1 - accuracy_score(Y_test, y_pred_knn)
+    print("\n")
+
+    tree_reg = DecisionTreeRegressor()
+    tree_reg.fit(X_train, Y_train)
+    y_pred_tree = tree_reg.predict(X_test)
+    print("DecisionTreeRegression on training data score :", tree_reg.score(X_train, Y_train))
+    print("Decision Regresion on test data score: ", tree_reg.score(X_test, Y_test))
+    #print("Accuracy:", accuracy_score(Y_test, y_pred_tree)
+    #print("Error:", 1 - accuracy_score(Y_test, y_pred_tree))
+    print("\n")
+
+    return results
+
+
+def train_with_k_fold(X, y, K_fold_split_size=10):
+    # apply K-Fold
+    print("Kfold uygulanması:\n")
+    kf = KFold(n_splits=K_fold_split_size)
+    results_2 = []
+    i=1
+    for train_index, test_index in kf.split(X):
+        # split dataset to train and test sets
+        print("Kfold index:", i)
+        X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+        y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+        i = i+1
+        results_2.append(implement_algorithms(X_train, X_test, y_train, y_test))
+        print("\n")
+
+    return results_2
+
+df = data_import()
+df_2 = df.copy()
+information(df)
+df = cleaning(df)
+df = normalization(df)
+feature_selection(df_2)
+df = non_numeric_to_numeric(df)
+df = data_generalization(df)
+df = reduction(df)
+df = non_numeric_to_numeric(df)
+
+print("düzenlenmiş veri seti:\n",df.head(5))
+
+# algoritmaların uygulanması
+df = clv(df)
+X_train, X_test, y_train, y_test = train_test_data(df)
+implement_algorithms(X_train, X_test, y_train, y_test)
+
+X,y = train_test_data_2(df)
+train_with_k_fold(X, y)
